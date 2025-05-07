@@ -26,11 +26,22 @@ def create_app():
     
     # 配置JWT
     app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
-    # app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(seconds=int(os.getenv('JWT_ACCESS_TOKEN_EXPIRES')))
-    # app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(seconds=int(os.getenv('JWT_REFRESH_TOKEN_EXPIRES')))
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=10)
     app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(hours=1)
 
+    # 配置Redis
+    app.config['REDIS_HOST'] = os.getenv('REDIS_HOST', 'localhost')
+    app.config['REDIS_PORT'] = int(os.getenv('REDIS_PORT', 6379))
+    app.config['REDIS_DB'] = int(os.getenv('REDIS_DB', 0))
+    app.config['PUBSUB_CHANNEL'] = os.getenv('PUBSUB_CHANNEL', 'task_progress')
+    app.config['TASK_QUEUE_PREFIX'] = os.getenv('TASK_QUEUE_PREFIX', 'task_queue_gpu_')
+    app.config['GPU_STATUS_PREFIX'] = os.getenv('GPU_STATUS_PREFIX', 'gpu_status:')
+    app.config['MAX_WORKERS'] = int(os.getenv('MAX_WORKERS', 2))
+    app.config['SCHEDULER_STRATEGY'] = os.getenv('SCHEDULER_STRATEGY', 'load_balance')
+    
+    # 配置文件服务
+    app.config['TEMP_FILE_DIR'] = os.getenv('TEMP_FILE_DIR', 'temp')
+    app.config['TEMP_FILE_EXPIRY'] = int(os.getenv('TEMP_FILE_EXPIRY', 24))
 
     # 初始化扩展
     db.init_app(app)
@@ -57,5 +68,13 @@ def create_app():
 
     from app.message import message_bp
     app.register_blueprint(message_bp)
+    
+    # 初始化SocketIO
+    from app.sockets import socketio, initialize_socket_listeners
+    socketio.init_app(app, cors_allowed_origins="*", async_mode='threading')
+    
+    # 初始化Redis监听器
+    with app.app_context():
+        initialize_socket_listeners(app)
     
     return app
