@@ -37,9 +37,9 @@ class Message(db.Model):
     end_of_conversation = Column(TIMESTAMP, nullable=True)
 
     __table_args__ = (
-        # 确保 type 只能是 'text', 'image', 'audio'
+        # 确保 type 只能是 'text', 'image', 'audio', 'video'
         CheckConstraint(
-            type.in_(['text', 'image', 'audio']),
+            type.in_(['text', 'image', 'audio', 'video']),
             name='message_type_check'
         ),
     )
