@@ -5,8 +5,7 @@ from app import db
 import uuid
 import requests
 from datetime import datetime
-from app.auth.jwt_auth import jwt_required
-from flask_jwt_extended import get_jwt_identity
+from flask_jwt_extended import get_jwt_identity, jwt_required
 
 @jwt_required
 def send_message():
