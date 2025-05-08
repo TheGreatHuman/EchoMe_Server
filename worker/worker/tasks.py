@@ -27,16 +27,17 @@ from inference.models.whisper.audio2feature import load_audio_model
 from inference.pipelines.pipeline_echo_mimic_acc import Audio2VideoPipeline
 from inference.utils.util import save_videos_grid, crop_and_pad
 from inference.models.face_locator import FaceLocator
+from configs.inference_config import InferenceConfig
 from facenet_pytorch import MTCNN
 
-from worker.worker.redis_reporter import RedisReporter
+from .redis_reporter import RedisReporter
 
 logger = logging.getLogger(__name__)
 
 class ModelManager:
     """模型管理器，负责加载和管理模型"""
     
-    def __init__(self, device: str, config: Dict[str, Any]):
+    def __init__(self, device: str, config: InferenceConfig, model_base_dir: Path):
         """初始化模型管理器
         
         Args:
@@ -44,9 +45,10 @@ class ModelManager:
             config: 配置信息
         """
         self.device = device
-        self.config = config
+        self.config: InferenceConfig = config
         self.models = {}
-        self.weight_dtype = torch.float16 if config.get('weight_dtype', 'fp16') == 'fp16' else torch.float32
+        self.weight_dtype = config.weight_dtype
+        self.model_base_dir = model_base_dir
         
         logger.info(f"模型管理器初始化成功，设备: {device}")
     
@@ -61,61 +63,69 @@ class ModelManager:
             
             # 加载VAE
             logger.info("加载VAE模型...")
+            pretrained_vae_path = os.path.join(self.model_base_dir, self.config.model_configs.pretrained_vae_path)
+            print(pretrained_vae_path)
             self.models['vae'] = AutoencoderKL.from_pretrained(
-                self.config['model_configs']['pretrained_vae_path'],
+                pretrained_vae_path,
             ).to(self.device, dtype=self.weight_dtype)
             
             # 加载参考网络
             logger.info("加载参考网络...")
+            pretrained_base_model_path = os.path.join(self.model_base_dir, self.config.model_configs.pretrained_base_model_path)
+            reference_unet_path = os.path.join(self.model_base_dir, self.config.model_configs.reference_unet_path)
             reference_unet = UNet2DConditionModel.from_pretrained(
-                self.config['model_configs']['pretrained_base_model_path'],
+                pretrained_base_model_path,
                 subfolder="unet",
             ).to(dtype=self.weight_dtype, device=self.device)
             reference_unet.load_state_dict(
-                torch.load(self.config['model_configs']['reference_unet_path'], map_location="cpu"),
+                torch.load(reference_unet_path, map_location="cpu"),
             )
             self.models['reference_unet'] = reference_unet
             
             # 加载去噪网络
             logger.info("加载去噪网络...")
-            if os.path.exists(self.config['model_configs']['motion_module_path']):
+            motion_module_path = os.path.join(self.model_base_dir, self.config.model_configs.motion_module_path)
+            if os.path.exists(motion_module_path):
                 # stage1 + stage2
                 denoising_unet = EchoUNet3DConditionModel.from_pretrained_2d(
-                    self.config['model_configs']['pretrained_base_model_path'],
-                    self.config['model_configs']['motion_module_path'],
+                    pretrained_base_model_path,
+                    motion_module_path,
                     subfolder="unet",
-                    unet_additional_kwargs=self.config['infer_configs']['unet_additional_kwargs'],
+                    unet_additional_kwargs=self.config.infer_configs.unet_additional_kwargs,
                 ).to(dtype=self.weight_dtype, device=self.device)
             else:
                 # 仅stage1
                 denoising_unet = EchoUNet3DConditionModel.from_pretrained_2d(
-                    self.config['model_configs']['pretrained_base_model_path'],
+                    pretrained_base_model_path,
                     "",
                     subfolder="unet",
                     unet_additional_kwargs={
                         "use_motion_module": False,
                         "unet_use_temporal_attention": False,
-                        "cross_attention_dim": self.config['infer_configs']['unet_additional_kwargs']['cross_attention_dim']
+                        "cross_attention_dim": self.config.infer_configs.unet_additional_kwargs.cross_attention_dim
                     }
                 ).to(dtype=self.weight_dtype, device=self.device)
+            denoising_unet_path = os.path.join(self.model_base_dir, self.config.model_configs.denoising_unet_path)
             denoising_unet.load_state_dict(
-                torch.load(self.config['model_configs']['denoising_unet_path'], map_location="cpu"),
+                torch.load(denoising_unet_path, map_location="cpu"),
                 strict=False
             )
             self.models['denoising_unet'] = denoising_unet
             
             # 加载面部定位器
             logger.info("加载面部定位器...")
+            face_locator_path = os.path.join(self.model_base_dir, self.config.model_configs.face_locator_path)
             face_locator = FaceLocator(320, conditioning_channels=1, block_out_channels=(16, 32, 96, 256)).to(
                 dtype=self.weight_dtype, device=self.device
             )
-            face_locator.load_state_dict(torch.load(self.config['model_configs']['face_locator_path']))
+            face_locator.load_state_dict(torch.load(face_locator_path))
             self.models['face_locator'] = face_locator
             
             # 加载音频处理器
             logger.info("加载音频处理器...")
+            audio_model_path = os.path.join(self.model_base_dir, self.config.model_configs.audio_model_path)
             audio_processor = load_audio_model(
-                model_path=self.config['model_configs']['audio_model_path'], 
+                model_path=audio_model_path, 
                 device=self.device
             )
             self.models['audio_processor'] = audio_processor
@@ -135,7 +145,7 @@ class ModelManager:
             
             # 加载调度器
             logger.info("加载调度器...")
-            sched_kwargs = OmegaConf.to_container(self.config['infer_configs']['noise_scheduler_kwargs'])
+            sched_kwargs = OmegaConf.to_container(self.config.infer_configs.noise_scheduler_kwargs)
             self.models['scheduler'] = DDIMScheduler(**sched_kwargs)
             
             logger.info("所有模型加载完成！")
@@ -200,7 +210,7 @@ class TaskProcessor:
     """任务处理器，负责处理音频到视频的推理任务"""
     
     def __init__(self, model_manager: ModelManager, reporter: RedisReporter, 
-                 temp_dir: str, output_dir: str, config: Dict[str, Any]):
+                 temp_dir: str, output_dir: str, config: InferenceConfig):
         """初始化任务处理器
         
         Args:
@@ -235,7 +245,7 @@ class TaskProcessor:
         try:
             # 如果URL是相对路径（如/api/chat/files/xxx.mp3），则添加基础URL
             if url.startswith('/'):
-                base_url = os.environ.get('BASE_URL', 'http://localhost:5000')
+                base_url = os.environ.get('BASE_URL', 'http://localhost:3000')
                 url = f"{base_url}{url}"
             
             # 下载文件
@@ -309,13 +319,13 @@ class TaskProcessor:
                 xyxy = select_bbox[:4]
                 xyxy = np.round(xyxy).astype('int')
                 rb, re, cb, ce = xyxy[1], xyxy[3], xyxy[0], xyxy[2]
-                r_pad = int((re - rb) * self.config.get('facemusk_dilation_ratio', 0.1))
-                c_pad = int((ce - cb) * self.config.get('facemusk_dilation_ratio', 0.1))
+                r_pad = int((re - rb) * self.config.facemusk_dilation_ratio)
+                c_pad = int((ce - cb) * self.config.facemusk_dilation_ratio)
                 face_mask[rb - r_pad : re + r_pad, cb - c_pad : ce + c_pad] = 255
 
                 # 人脸裁剪
-                r_pad_crop = int((re - rb) * self.config.get('facecrop_dilation_ratio', 0.5))
-                c_pad_crop = int((ce - cb) * self.config.get('facecrop_dilation_ratio', 0.5))
+                r_pad_crop = int((re - rb) * self.config.facecrop_dilation_ratio)
+                c_pad_crop = int((ce - cb) * self.config.facecrop_dilation_ratio)
                 crop_rect = [
                     max(0, cb - c_pad_crop), 
                     max(0, rb - r_pad_crop), 
@@ -327,8 +337,8 @@ class TaskProcessor:
                 face_mask, _ = crop_and_pad(face_mask, crop_rect)
                 
                 # 调整大小
-                face_img = cv2.resize(face_img, (self.config.get('width', 512), self.config.get('height', 512)))
-                face_mask = cv2.resize(face_mask, (self.config.get('width', 512), self.config.get('height', 512)))
+                face_img = cv2.resize(face_img, (self.config.width, self.config.height))
+                face_mask = cv2.resize(face_mask, (self.config.width, self.config.height))
             
             # 将OpenCV图像转换为PIL图像
             ref_image_pil = Image.fromarray(face_img[:, :, [2, 1, 0]])
@@ -340,16 +350,16 @@ class TaskProcessor:
             ).unsqueeze(0).unsqueeze(0).unsqueeze(0) / 255.0
             
             # 准备推理参数
-            width = self.config.get('width', 512)
-            height = self.config.get('height', 512)
-            length = self.config.get('length', 1200)
-            steps = self.config.get('steps', 6)
-            cfg = self.config.get('cfg', 1.0)
-            context_frames = self.config.get('context_frames', 12)
-            context_overlap = self.config.get('context_overlap', 3)
-            sample_rate = self.config.get('sample_rate', 16000)
-            fps = self.config.get('fps', 24)
-            seed = self.config.get('seed', None)
+            width = self.config.width
+            height = self.config.height
+            length = self.config.length
+            steps = self.config.steps
+            cfg = self.config.cfg
+            context_frames = self.config.context_frames
+            context_overlap = self.config.context_overlap
+            sample_rate = self.config.sample_rate
+            fps = self.config.fps
+            seed = self.config.seed
             
             if seed is not None and seed > -1:
                 generator = torch.manual_seed(seed)

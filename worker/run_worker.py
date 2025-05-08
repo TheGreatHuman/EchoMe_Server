@@ -13,10 +13,27 @@ from pathlib import Path
 import torch
 from omegaconf import OmegaConf
 
-from worker.config import WorkerConfig
-from worker.worker.redis_reporter import RedisReporter
-from worker.worker.tasks import ModelManager, TaskProcessor, TaskConsumer
-from configs.inference_config.infer_config import InferenceConfig
+
+# 获取当前文件所在目录
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# 获取上一级目录
+parent_dir = os.path.dirname(current_dir)
+# print(parent_dir)
+
+# 将上一级目录添加到sys.path
+sys.path.append(parent_dir)
+
+from config import WorkerConfig
+from worker.redis_reporter import RedisReporter
+from worker.tasks import ModelManager, TaskProcessor, TaskConsumer
+from configs.inference_config import InferenceConfig
+
+from dotenv import load_dotenv
+
+
+# 加载环境变量
+load_dotenv()
 
 # 日志配置
 logging.basicConfig(
@@ -93,11 +110,13 @@ def main():
     
     # 加载推理配置
     inference_config = InferenceConfig()
+    # print(type(inference_config))
     
     # 初始化模型管理器
     model_manager = ModelManager(
         device=config.device, 
-        config=OmegaConf.to_container(inference_config.model_configs)
+        config=inference_config,
+        model_base_dir = parent_dir
     )
     
     # 加载模型

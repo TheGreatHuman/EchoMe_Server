@@ -21,7 +21,8 @@ class TaskSubmitter:
         redis_host = current_app.config.get('REDIS_HOST', 'localhost')
         redis_port = current_app.config.get('REDIS_PORT', 6379)
         redis_db = current_app.config.get('REDIS_DB', 0)
-        self.redis_client = redis.Redis(host=redis_host, port=redis_port, db=redis_db)
+        redis_pass = current_app.config.get('REDIS_PASSWORD')
+        self.redis_client = redis.Redis(host=redis_host, port=redis_port, db=redis_db, password=redis_pass)
         
         # 任务队列通道前缀
         self.pubsub_channel = current_app.config.get('PUBSUB_CHANNEL', 'task_events')

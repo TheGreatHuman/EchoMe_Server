@@ -9,7 +9,7 @@ import threading
 import time
 from typing import Dict, Any, Optional
 from functools import wraps
-from flask import request
+from flask import request, current_app
 from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect
 import redis
 
@@ -95,9 +95,10 @@ def init_redis_connection():
         redis_host = current_app.config.get('REDIS_HOST', 'localhost')
         redis_port = current_app.config.get('REDIS_PORT', 6379)
         redis_db = current_app.config.get('REDIS_DB', 0)
+        redis_pass = current_app.config.get('REDIS_PASSWORD')
         
         # 创建Redis连接
-        redis_client = redis.Redis(host=redis_host, port=redis_port, db=redis_db)
+        redis_client = redis.Redis(host=redis_host, port=redis_port, db=redis_db, password=redis_pass)
         
         # 创建PubSub对象
         redis_pubsub = redis_client.pubsub()
