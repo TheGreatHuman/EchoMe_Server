@@ -117,7 +117,8 @@ def handle_redis_message(message):
     """处理从Redis PubSub接收到的消息"""
     try:
         # 检查消息类型
-        if message['type'] != 'message':
+        if message['type'] != 'message' and message['type'] != 'pmessage':
+            logger.debug(f"忽略非消息类型: {message['type']}")
             return
         
         # 解析消息数据
@@ -134,6 +135,9 @@ def handle_redis_message(message):
         if not session_id:
             logger.warning(f"收到的消息没有有效的session_id: {data}")
             return
+        
+        # 记录收到的消息
+        logger.debug(f"处理Redis消息: {data}")
         
         # 根据消息的状态类型转发给客户端
         status = data.get('status')
@@ -173,14 +177,17 @@ def handle_redis_message(message):
                 
         elif status == 'error':
             # 错误通知
+            error_msg = data.get('error') or data.get('message', '处理任务时出错')
             socketio.emit('error', {
                 'task_id': task_id,
-                'message': data.get('message', '处理任务时出错')
+                'message': error_msg
             }, room=session_id)
             
             # 清理任务映射
             if task_id in task_session_mapping:
                 del task_session_mapping[task_id]
+        else:
+            logger.warning(f"收到未知状态的消息: {status}")
         
     except Exception as e:
         logger.exception(f"处理Redis消息时出错: {str(e)}")
@@ -198,7 +205,11 @@ def redis_listener_loop():
                 message = redis_pubsub.get_message(timeout=1)
                 
                 if message:
-                    handle_redis_message(message)
+                    # 只处理实际的消息数据，忽略订阅确认等消息
+                    if message['type'] == 'message' or message['type'] == 'pmessage':
+                        handle_redis_message(message)
+                    else:
+                        logger.debug(f"收到非消息类型的Redis数据: {message['type']}")
             
             # 避免CPU占用过高
             time.sleep(0.01)
@@ -326,14 +337,6 @@ def on_request_connection(data):
             })
             return
         
-        # 存储会话信息
-        session_info[session_id] = {
-            'mode': mode,
-            'role_id': role_id,
-            'conversation_id': conversation_id,
-            'user_id': user_id
-        }
-        
         # TODO: 获取AI角色详细信息
         # 这里应调用某个服务或直接查询数据库获取角色信息，包括名称、描述、图片URL等
         ai_role_info = {
@@ -341,6 +344,15 @@ def on_request_connection(data):
             'name': '默认角色名',
             'personality': '默认性格描述',
             'image_url': '/default_image.jpg'
+        }
+        
+        # 存储会话信息
+        session_info[session_id] = {
+            'mode': mode,
+            'role_id': role_id,
+            'conversation_id': conversation_id,
+            'user_id': user_id,
+            'ai_role': ai_role_info
         }
         
         # 发送连接确认
@@ -467,6 +479,8 @@ def on_audio_uploaded(data):
                 # 获取角色图片URL
                 # 实际应用中应从数据库获取
                 role_image_url = '/default_image.jpg'  # 临时使用默认值
+                if session_id in session_info and 'ai_role' in session_info[session_id]:
+                    role_image_url = session_info[session_id]['ai_role'].get('image_url', role_image_url)
                 
                 # 构建任务数据
                 task_payload = {
@@ -474,7 +488,10 @@ def on_audio_uploaded(data):
                     'session_id': session_id,
                     'role_image_url': role_image_url,
                     'audio_url': synthesized_audio_url,
-                    'text': recognized_text
+                    'text': recognized_text,
+                    'user_id': session_info.get(session_id, {}).get('user_id', 'unknown'),
+                    'role_id': role_id,
+                    'timestamp': int(time.time())
                 }
                 
                 # 记录任务与会话的映射关系
@@ -575,9 +592,20 @@ def on_stop_session(data):
 def initialize_socket_listeners(app):
     """初始化Socket和Redis监听器"""
     with app.app_context():
-        start_redis_listener()
+        try:
+            # 确保在应用上下文中初始化Redis连接
+            logger.info("正在初始化Redis监听器...")
+            
+            # 启动Redis监听器
+            start_redis_listener()
+            
+            logger.info("Redis监听器已成功启动")
+        except Exception as e:
+            logger.error(f"初始化Redis监听器失败: {str(e)}")
     
     # 注册应用关闭时的处理函数
     @app.teardown_appcontext
     def teardown_socket_listeners(exception=None):
-        stop_redis_listener() 
+        logger.info("正在关闭Redis监听器...")
+        stop_redis_listener()
+        logger.info("Redis监听器已关闭") 
