@@ -33,6 +33,7 @@ def create_app():
     app.config['REDIS_HOST'] = os.getenv('REDIS_HOST', 'localhost')
     app.config['REDIS_PORT'] = int(os.getenv('REDIS_PORT', 6379))
     app.config['REDIS_DB'] = int(os.getenv('REDIS_DB', 0))
+    app.config['REDIS_PASSWORD'] = int(os.getenv('REDIS_PASSWORD', 0))
     app.config['PUBSUB_CHANNEL'] = os.getenv('PUBSUB_CHANNEL', 'task_progress')
     app.config['TASK_QUEUE_PREFIX'] = os.getenv('TASK_QUEUE_PREFIX', 'task_queue_gpu_')
     app.config['GPU_STATUS_PREFIX'] = os.getenv('GPU_STATUS_PREFIX', 'gpu_status:')
