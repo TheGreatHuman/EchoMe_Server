@@ -16,7 +16,7 @@ logging.basicConfig(
 
 # 创建应用
 from app import create_app
-from app.sockets import socketio
+from app.chat import socketio
 
 app = create_app()
 
@@ -32,5 +32,3 @@ if __name__ == '__main__':
         debug=os.getenv('FLASK_ENV') == 'development',
         use_reloader=os.getenv('FLASK_ENV') == 'development'
     )
-    
-    print(f"应用已启动: http://localhost:{port}")

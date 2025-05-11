@@ -1,4 +1,4 @@
-from app.message import message_bp
+from . import message_bp
 from .controllers.message_crud import send_message, delete_messages
 from .controllers.message_list import get_conversation_messages
 

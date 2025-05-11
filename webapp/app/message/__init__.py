@@ -2,4 +2,4 @@ from flask import Blueprint
 
 message_bp = Blueprint('message', __name__, url_prefix='/api/message')
 
-from app.message import routes 
+from . import routes 

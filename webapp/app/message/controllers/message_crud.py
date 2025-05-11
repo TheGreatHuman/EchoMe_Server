@@ -7,7 +7,7 @@ import requests
 from datetime import datetime
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
-@jwt_required
+@jwt_required()
 def send_message():
     """发送消息并获取AI回复"""
     try:
@@ -81,7 +81,7 @@ def send_message():
         db.session.rollback()
         return jsonify({"code": 500, "message": f"服务器错误: {str(e)}"}), 500
 
-@jwt_required
+@jwt_required()
 def delete_messages():
     """删除多条消息"""
     try:

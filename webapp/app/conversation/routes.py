@@ -1,4 +1,4 @@
-from app.conversation import conversation_bp
+from . import conversation_bp
 from .controllers.conversation_crud import create_conversation, update_conversation, delete_conversation
 from .controllers.conversation_list import get_user_role_conversations
 

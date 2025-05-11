@@ -4,7 +4,7 @@ from app import db
 import uuid
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
-@jwt_required
+@jwt_required()
 def get_user_role_conversations():
     """获取用户与特定角色的所有会话"""
     try:

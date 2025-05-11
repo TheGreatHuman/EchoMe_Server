@@ -5,7 +5,7 @@ from app import db
 import uuid
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
-@jwt_required
+@jwt_required()
 def get_conversation_messages():
     """获取会话的所有消息"""
     try:

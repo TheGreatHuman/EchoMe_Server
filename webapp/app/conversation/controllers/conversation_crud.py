@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
-@jwt_required
+@jwt_required()
 def create_conversation():
     """创建新会话"""
     try:
@@ -47,7 +47,7 @@ def create_conversation():
         db.session.rollback()
         return jsonify({"code": 500, "message": f"服务器错误: {str(e)}"}), 500
 
-@jwt_required
+@jwt_required()
 def update_conversation():
     """更新会话信息"""
     try:
@@ -97,7 +97,7 @@ def update_conversation():
         db.session.rollback()
         return jsonify({"code": 500, "message": f"服务器错误: {str(e)}"}), 500
 
-@jwt_required
+@jwt_required()
 def delete_conversation():
     """删除会话及其所有消息"""
     try:
