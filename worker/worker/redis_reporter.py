@@ -99,14 +99,14 @@ class RedisReporter:
             logger.error(f"进度上报失败: {str(e)}")
             return False
     
-    def report_completion(self, task_id: str, session_id: str, video_url: str, 
+    def report_completion(self, task_id: str, session_id: str, video_file_id: str, 
                          message: Optional[str] = None) -> bool:
         """上报任务完成
         
         Args:
             task_id: 任务ID
             session_id: 会话ID
-            video_url: 生成视频的URL
+            video_file_id: 生成视频的临时文件ID
             message: 完成消息（可选）
             
         Returns:
@@ -117,7 +117,7 @@ class RedisReporter:
                 'task_id': task_id,
                 'session_id': session_id,
                 'status': 'completed',
-                'video_url': video_url
+                'video_file_id': video_file_id
             }
             
             if message:
@@ -127,7 +127,7 @@ class RedisReporter:
                 self.progress_channel,
                 json.dumps(data)
             )
-            logger.info(f"完成上报成功: {task_id} - {video_url}")
+            logger.info(f"完成上报成功: {task_id} - 视频文件ID: {video_file_id}")
             return True
         except Exception as e:
             logger.error(f"完成上报失败: {str(e)}")

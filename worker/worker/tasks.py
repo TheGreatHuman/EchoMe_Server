@@ -232,21 +232,30 @@ class TaskProcessor:
         
         logger.info("任务处理器初始化完成")
     
-    def download_file(self, url: str, save_path: str) -> bool:
+    def download_file(self, url_or_file_id: str, save_path: str) -> bool:
         """下载文件到本地
         
         Args:
-            url: 文件URL
+            url_or_file_id: 文件URL或文件ID
             save_path: 保存路径
             
         Returns:
             bool: 是否下载成功
         """
         try:
-            # 如果URL是相对路径（如/api/chat/files/xxx.mp3），则添加基础URL
-            if url.startswith('/'):
-                base_url = os.environ.get('BASE_URL', 'http://localhost:3000')
-                url = f"{base_url}{url}"
+            # 确定基础URL
+            base_url = os.environ.get('BASE_URL', 'http://localhost:3000')
+            
+            # 判断是否为文件ID（不含路径分隔符和http协议前缀）
+            if '/' not in url_or_file_id and ':' not in url_or_file_id:
+                # 视为文件ID，使用临时文件API下载
+                url = f"{base_url}/api/tempfile/download/{url_or_file_id}"
+            else:
+                # 如果URL是相对路径（如/api/chat/files/xxx.mp3），则添加基础URL
+                if url_or_file_id.startswith('/'):
+                    url = f"{base_url}{url_or_file_id}"
+                else:
+                    url = url_or_file_id
             
             # 下载文件
             response = requests.get(url, stream=True)
@@ -262,43 +271,68 @@ class TaskProcessor:
             logger.error(f"文件下载失败: {str(e)}")
             return False
     
+    def upload_file(self, file_path: str) -> Optional[str]:
+        """将文件上传到临时文件API
+        
+        Args:
+            file_path: 文件路径
+            
+        Returns:
+            Optional[str]: 成功时返回文件ID，失败时返回None
+        """
+        try:
+            base_url = os.environ.get('BASE_URL', 'http://localhost:3000')
+            upload_url = f"{base_url}/api/tempfile/upload"
+            
+            # 准备文件数据
+            with open(file_path, 'rb') as f:
+                files = {'file': (os.path.basename(file_path), f)}
+                
+                # 上传文件
+                response = requests.post(upload_url, files=files)
+                response.raise_for_status()
+                
+                # 解析响应
+                result = response.json()
+                if result.get('success'):
+                    file_id = result.get('file_id')
+                    logger.info(f"文件上传成功，文件ID: {file_id}")
+                    return file_id
+                else:
+                    logger.error(f"文件上传API返回错误: {result.get('message')}")
+                    return None
+        except Exception as e:
+            logger.error(f"文件上传失败: {str(e)}")
+            return None
+    
     def process_task(self, task_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         """处理音频到视频的推理任务
         
         Args:
-            task_data: 任务数据，包含任务ID、会话ID、角色图片URL、音频URL等
+            task_data: 任务数据，包含任务ID、会话ID、角色图片(文件ID)、音频(文件ID)等
             
         Returns:
-            Tuple[bool, Optional[str]]: (是否成功, 视频URL)
+            Tuple[bool, Optional[str]]: (是否成功, 临时文件ID)
         """
         try:
             task_id = task_data.get('task_id')
             session_id = task_data.get('session_id')
-            role_image_url = task_data.get('role_image_url')
-            audio_url = task_data.get('audio_url')
+            ref_image_id = task_data.get('ref_image_id')  # 改为文件ID
+            audio_id = task_data.get('audio_id')  # 改为文件ID
             
             # 检查必要参数
-            if not all([task_id, session_id, role_image_url, audio_url]):
+            if not all([task_id, session_id, ref_image_id, audio_id]):
                 raise ValueError("缺少必要的任务参数")
             
-            # 下载参考图片和音频文件
-            ref_name = os.path.basename(role_image_url).split('?')[0]  # 移除URL参数
-            audio_name = os.path.basename(audio_url).split('?')[0]
-            
-            # 确保文件名有扩展名
-            if '.' not in ref_name:
-                ref_name = f"{ref_name}.jpg"
-            if '.' not in audio_name:
-                audio_name = f"{audio_name}.mp3"
-            
-            ref_path = os.path.join(self.temp_dir, f"{task_id}_{ref_name}")
-            audio_path = os.path.join(self.temp_dir, f"{task_id}_{audio_name}")
+            # 为临时文件生成本地保存路径
+            ref_path = os.path.join(self.temp_dir, f"{task_id}_ref_image.jpg")
+            audio_path = os.path.join(self.temp_dir, f"{task_id}_audio.wav")
             
             # 下载文件
             self.reporter.report_status(task_id, session_id, 'processing', '下载必要文件...')
-            if not self.download_file(role_image_url, ref_path):
+            if not self.download_file(ref_image_id, ref_path):
                 raise Exception("下载参考图片失败")
-            if not self.download_file(audio_url, audio_path):
+            if not self.download_file(audio_id, audio_path):
                 raise Exception("下载音频文件失败")
             
             # 人脸处理
@@ -386,7 +420,7 @@ class TaskProcessor:
             date_str = datetime.now().strftime("%Y%m%d")
             time_str = datetime.now().strftime("%H%M%S")
             
-            output_name = f"{ref_name.split('.')[0]}_{audio_name.split('.')[0]}_{height}x{width}_{int(cfg)}_{time_str}"
+            output_name = f"{ref_image_id.split('.')[0]}_{audio_id.split('.')[0]}_{height}x{width}_{int(cfg)}_{time_str}"
             
             # 创建输出子目录
             save_dir = Path(f"{self.output_dir}/{date_str}/{task_id}_{time_str}")
@@ -428,20 +462,26 @@ class TaskProcessor:
                 logger.warning("使用FFmpeg添加音频失败，将返回无音频视频")
                 output_path_with_audio = output_path
                 
+            # 上传视频到临时文件API
+            self.reporter.report_progress(task_id, session_id, 98, '上传视频...')
+            video_file_id = self.upload_file(output_path_with_audio)
+            
+            if not video_file_id:
+                raise Exception("上传视频失败")
+                
             # 清理临时文件
             try:
                 os.remove(ref_path)
                 os.remove(audio_path)
+                os.remove(output_path)
+                os.remove(output_path_with_audio) if output_path_with_audio != output_path else None
             except Exception as e:
                 logger.warning(f"清理临时文件失败: {str(e)}")
-            
-            # 计算视频URL
-            video_url = f"/api/chat/files/{date_str}/{task_id}_{time_str}/{output_name}_withaudio.mp4"
             
             # 清理GPU内存
             torch.cuda.empty_cache()
             
-            return True, video_url
+            return True, video_file_id
         except Exception as e:
             logger.error(f"任务处理失败: {str(e)}")
             logger.error(traceback.format_exc())
@@ -530,6 +570,26 @@ class TaskConsumer:
         if self._thread:
             self._thread.join(timeout=2.0)
         logger.info("任务消费者已停止")
+
+    def _remove_task_from_set(self, task_id: str) -> bool:
+        """
+        从集合中移除已完成的任务ID
+        
+        Args:
+            task_id: 要移除的任务ID
+            
+        Returns:
+            bool: 是否成功移除
+        """
+        try:
+            task_set_key = "all_task_ids"
+            removed = self.redis_client.srem(task_set_key, task_id)
+            if removed:
+                logger.info(f"任务ID {task_id} 已从跟踪集合中移除")
+            return bool(removed)
+        except Exception as e:
+            logger.exception(f"从集合中移除任务ID时出错: {str(e)}")
+            return False
     
     def _run_consumer(self) -> None:
         """运行任务消费循环"""
@@ -557,13 +617,16 @@ class TaskConsumer:
                 self.reporter.update_gpu_status(self.gpu_status_key, 'busy')
                 
                 # 处理任务
-                success, video_url = self.task_processor.process_task(task_data)
+                success, video_file_id = self.task_processor.process_task(task_data)
                 
                 # 处理结果
-                if success and video_url:
-                    self.reporter.report_completion(task_id, session_id, video_url, '视频生成完成')
+                if success and video_file_id:
+                    self.reporter.report_completion(task_id, session_id, video_file_id, '视频生成完成')
                 else:
                     self.reporter.report_error(task_id, session_id, '视频生成失败')
+
+                # 移除任务ID
+                self._remove_task_from_set(task_id)
             except Exception as e:
                 logger.error(f"任务处理过程中出错: {str(e)}")
                 logger.error(traceback.format_exc())

@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import os
 import random
 from typing import Optional, List, Dict
 import redis
@@ -22,24 +23,24 @@ class Scheduler:
     def __init__(self):
         """初始化调度器"""
         # 从配置获取Redis连接信息
-        redis_host = current_app.config.get('REDIS_HOST', 'localhost')
-        redis_port = current_app.config.get('REDIS_PORT', 6379)
-        redis_db = current_app.config.get('REDIS_DB', 0)
-        redis_pass = current_app.config.get('REDIS_PASSWORD')
+        redis_host = os.getenv('REDIS_HOST', 'localhost')
+        redis_port = os.getenv('REDIS_PORT', 6379)
+        redis_db = os.getenv('REDIS_DB', 0)
+        redis_pass = os.getenv('REDIS_PASSWORD')
         self.redis_client = redis.Redis(host=redis_host, port=redis_port, db=redis_db, password=redis_pass)
         
         # 队列名前缀和最大Worker数量
-        self.task_queue_prefix = current_app.config.get('TASK_QUEUE_PREFIX', 'task_queue_gpu_')
-        self.max_workers = current_app.config.get('MAX_WORKERS', 2)
+        self.task_queue_prefix = os.getenv('TASK_QUEUE_PREFIX', 'task_queue_gpu_')
+        self.max_workers = os.getenv('MAX_WORKERS', 2)
         
         # Worker状态键前缀
-        self.gpu_status_prefix = current_app.config.get('GPU_STATUS_PREFIX', 'gpu_status:')
+        self.gpu_status_prefix = os.getenv('GPU_STATUS_PREFIX', 'gpu_status:')
         
         # 上次选择的Worker索引（用于轮询）
         self.last_selected_index = -1
         
         # 调度策略
-        self.strategy = current_app.config.get('SCHEDULER_STRATEGY', 'load_balance')
+        self.strategy = os.getenv('SCHEDULER_STRATEGY', 'load_balance')
     
     def get_worker_status(self, worker_id: int) -> str:
         """

@@ -5,163 +5,181 @@ import os
 import logging
 import json
 import tempfile
-import uuid
-from typing import Optional, Dict, Any, List
-import requests
-from flask import current_app
+import time
+from typing import List, Dict, Any, Optional, Callable, Union, Tuple, Generator, BinaryIO
+import base64
+import threading
+import warnings
+from queue import Queue
+from http import HTTPStatus
+
 import dashscope
+from dashscope import Generation
+from dashscope.audio.tts_v2 import SpeechSynthesizer, ResultCallback, AudioFormat
 from dashscope import MultiModalConversation
 
 logger = logging.getLogger(__name__)
 
 class AliyunAPIService:
     """
-    阿里云API服务，用于封装对Qwen-Audio和CosyVoice的调用
+    阿里云API服务封装，提供语音识别(ASR)和语音合成(TTS)能力
     """
     
-    def __init__(self, api_key: Optional[str] = None):
-        """
-        初始化阿里云API服务
-        
-        Args:
-            api_key: 阿里云DashScope API Key，如果不提供则从环境变量获取
-        """
-        # 从环境变量获取API Key或使用传入的API Key
-        self.api_key = api_key or os.environ.get('DASHSCOPE_API_KEY')
-        
-        if not self.api_key:
-            logger.warning("未提供DASHSCOPE_API_KEY，API调用将可能失败")
+    def __init__(self):
+        """初始化阿里云API服务"""
+        # 从环境变量获取API密钥
+        api_key = os.getenv('DASHSCOPE_API_KEY')
+        if not api_key:
+            logger.warning("DASHSCOPE_API_KEY环境变量未设置，可能影响API调用")
         else:
-            dashscope.api_key = self.api_key
-    
-    def recognize_audio(self, audio_url: str) -> Optional[str]:
+            dashscope.api_key = api_key
+            
+        # 默认TTS模型和ASR模型
+        self.tts_model = os.getenv('TTS_MODEL', 'cosyvoice-v2')
+        self.asr_model = os.getenv('ASR_MODEL', 'qwen-audio-turbo-latest')
+
+    def conclude_chat(self, messages: List[Dict[str, Any]]) -> str:
         """
-        使用Qwen-Audio识别音频
+        总结本轮聊天的内容
         
         Args:
-            audio_url: 音频URL
+            messages: 对话历史
             
         Returns:
-            Optional[str]: 识别的文本，如果失败则返回None
+            str: 总结内容
+            
+        Raises:
+            Exception: 如果API调用失败
         """
         try:
-            # 构建消息
-            messages = [
-                {'role': 'user', 'content': [{'audio': audio_url}]}
-            ]
+            need_conclude_messages = []
+            for message in reversed(messages):
+                if message['role'] == 'system':
+                    need_conclude_messages.append(message)
+                    break
+                else:
+                    need_conclude_messages.append(message)
+            if len(need_conclude_messages) <= 2:
+                return None
+            need_conclude_messages.reverse()
+            need_conclude_messages.append({
+                "role": "user",
+                "content": [{"text": "总结以上对话的内容，方便下次聊天时参考"}]
+            })
+
             
-            # 调用API
+            # 调用ASR API
             response = MultiModalConversation.call(
-                model='qwen-audio-turbo-latest',
-                messages=messages,
-                result_format='message'
+                model=self.asr_model,
+                messages=need_conclude_messages,
+                result_format="message"
             )
             
-            # 检查响应状态
             if response.status_code != 200:
-                error_msg = f"识别音频失败: Code={response.code}, Message={response.message}"
-                logger.error(error_msg)
-                return None
-            
-            # 提取文本
-            text = ""
-            if response.output and response.output.choices:
-                for content_item in response.output.choices[0].message.content:
-                    if "text" in content_item:
-                        text += content_item["text"]
-            
-            return text
+                raise Exception(f"ASR API调用失败: {response.message}")
+                
+            # 提取识别文本
+            recognized_text = response.output.choices[0].message.content[0].text
+            logger.info(f"ASR结果: {recognized_text}")
+            return recognized_text
             
         except Exception as e:
-            logger.exception(f"识别音频时出错: {str(e)}")
-            return None
+            logger.error(f"语音识别失败: {str(e)}")
+            raise Exception(f"语音识别失败: {str(e)}")
+
     
-    def synthesize_speech(self, text: str, voice_id: Optional[str] = None) -> Optional[str]:
+    class StreamCallback(ResultCallback):
+        """TTS流式回调处理类"""
+        
+        def __init__(self, stream_callback):
+            self.stream_callback = stream_callback
+            self.is_open = False
+            
+        def on_open(self):
+            self.is_open = True
+            logger.debug("TTS流式连接已建立")
+            
+        def on_data(self, data: bytes) -> None:
+            # 回调上层处理函数处理音频块
+            self.stream_callback(data, False)
+            
+        def on_complete(self):
+            logger.debug("TTS流式合成完成")
+            # 发送最后一个块标记
+            self.stream_callback(b'', True)
+            
+        def on_error(self, message: str):
+            logger.error(f"TTS流式合成错误: {message}")
+            
+        def on_close(self):
+            self.is_open = False
+            logger.debug("TTS流式连接已关闭")
+            
+        def on_event(self, message):
+            logger.debug(f"TTS流式事件: {message}")
+
+    def audio_stream_mode(
+            self, 
+            voice_id: str, 
+            stream_callback,
+            speech_rate: float = 1.0, 
+            pitch_rate: float = 1.0,
+            messages: List[Dict[str, Any]] = None,
+            format: AudioFormat = AudioFormat.MP3_22050HZ_MONO_256KBPS
+        ) -> str:
         """
-        使用CosyVoice合成语音
+        流式调用阿里云语音合成服务，通过回调函数实时返回合成的音频块
         
         Args:
-            text: 要合成的文本
-            voice_id: 语音ID，如果不提供则使用默认语音
-            
+            voice_id: 音色ID
+            stream_callback: 回调函数，接收(bytes, is_last)参数
+            speech_rate: 语速，范围0.5~2.0
+            pitch_rate: 音调，范围0.5~2.0
+            format: 音频格式
+            messages: 对话历史
         Returns:
-            Optional[str]: 合成的音频URL，如果失败则返回None
+            str: 回答文本
+        Raises:
+            Exception: 如果API调用失败
         """
         try:
-            # 设置API端点和参数
-            url = "https://dashscope.aliyuncs.com/api/v1/cosy/voice/tts"
+            # 创建回调处理器
+            callback = self.StreamCallback(stream_callback)
             
-            # 默认参数
-            payload = {
-                "model": "cosy-voice-v1",
-                "input": {
-                    "text": text
-                },
-                "parameters": {
-                    "format": "wav",
-                    "sample_rate": 24000
-                }
-            }
+            # 创建合成器实例
+            synthesizer = SpeechSynthesizer(
+                model=self.tts_model,
+                voice=voice_id,
+                format=format,
+                speech_rate=speech_rate,
+                pitch_rate=pitch_rate,
+                callback=callback
+            )
+
+            responses = MultiModalConversation.call(
+                model="qwen-audio-turbo-latest", 
+                messages=messages,
+                stream=True,
+                incremental_output=True,
+                result_format="message"
+            )
+            response_text = ""
+
+            logger.info("TTS流式合成开始")
+
+            for response in responses:
+                if response.status_code == HTTPStatus.OK:
+                    llm_text_chunk = response.output.choices[0]['message']['content']
+                    response_text += llm_text_chunk
+                    synthesizer.streaming_call(llm_text_chunk)
+            synthesizer.streaming_complete()
+            return response_text
             
-            # 如果提供了voice_id，添加到参数中
-            if voice_id:
-                payload["parameters"]["voice_id"] = voice_id
-            
-            # 设置请求头
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            # 发送请求
-            response = requests.post(url, json=payload, headers=headers)
-            
-            # 检查响应状态
-            if response.status_code != 200:
-                error_msg = f"合成语音失败: Status={response.status_code}, Response={response.text}"
-                logger.error(error_msg)
-                return None
-            
-            # 解析响应
-            response_data = response.json()
-            
-            # 获取音频数据和保存
-            audio_data = response_data.get("output", {}).get("audio", "")
-            if not audio_data:
-                logger.error("响应中没有音频数据")
-                return None
-            
-            # 从FileService保存音频文件并获取URL
-            from app.services.file_service import FileService
-            file_service = FileService()
-            
-            # 创建临时文件
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-            try:
-                # 将Base64解码的音频数据写入文件
-                import base64
-                audio_binary = base64.b64decode(audio_data)
-                temp_file.write(audio_binary)
-                temp_file.close()
-                
-                # 生成唯一文件名
-                unique_filename = f"{uuid.uuid4().hex}.wav"
-                
-                # 保存到目标目录
-                file_path = os.path.join(file_service.temp_dir, unique_filename)
-                import shutil
-                shutil.copy2(temp_file.name, file_path)
-                
-                # 生成访问URL
-                file_url = f"/api/chat/files/{unique_filename}"
-                
-                logger.info(f"语音合成文件已保存: {file_path}")
-                return file_url
-                
-            finally:
-                # 删除临时文件
-                os.unlink(temp_file.name)
             
         except Exception as e:
-            logger.exception(f"合成语音时出错: {str(e)}")
-            return None 
+            logger.error(f"语音流式合成失败: {str(e)}")
+            raise Exception(f"语音流式合成失败: {str(e)}")
+
+
+# 创建全局实例
+aliyun_service = AliyunAPIService()

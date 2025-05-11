@@ -17,6 +17,7 @@ AUDIO_FOLDER = os.path.join(UPLOAD_FOLDER, 'audio')
 os.makedirs(IMAGE_FOLDER, exist_ok=True)
 os.makedirs(AUDIO_FOLDER, exist_ok=True)
 
+
 # 允许的文件类型
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 ALLOWED_AUDIO_EXTENSIONS = {'mp3', 'wav', 'ogg', 'aac', 'm4a', 'flac'}

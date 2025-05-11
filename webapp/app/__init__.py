@@ -4,6 +4,8 @@ from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 import os
 from datetime import timedelta
+import threading
+import time
 
 # 初始化SQLAlchemy
 db = SQLAlchemy()
@@ -33,7 +35,7 @@ def create_app():
     app.config['REDIS_HOST'] = os.getenv('REDIS_HOST', 'localhost')
     app.config['REDIS_PORT'] = int(os.getenv('REDIS_PORT', 6379))
     app.config['REDIS_DB'] = int(os.getenv('REDIS_DB', 0))
-    app.config['REDIS_PASSWORD'] = int(os.getenv('REDIS_PASSWORD', 0))
+    app.config['REDIS_PASSWORD'] = os.getenv('REDIS_PASSWORD', 0)
     app.config['PUBSUB_CHANNEL'] = os.getenv('PUBSUB_CHANNEL', 'task_progress')
     app.config['TASK_QUEUE_PREFIX'] = os.getenv('TASK_QUEUE_PREFIX', 'task_queue_gpu_')
     app.config['GPU_STATUS_PREFIX'] = os.getenv('GPU_STATUS_PREFIX', 'gpu_status:')
@@ -55,14 +57,15 @@ def create_app():
     from app.voice import voice_bp # Import the new blueprint
     app.register_blueprint(voice_bp) # Register the new blueprint
     
-    from app.file import file_bp
+    from app.file import file_bp, temp_file_bp
     app.register_blueprint(file_bp)
+    app.register_blueprint(temp_file_bp)
     
     from app.ai_role import ai_role_bp
     app.register_blueprint(ai_role_bp)
 
-    from app.routes.chat_file_routes import chat_file_bp
-    app.register_blueprint(chat_file_bp)
+    # from app.routes.chat_file_routes import chat_file_bp
+    # app.register_blueprint(chat_file_bp)
 
     from app.conversation import conversation_bp
     app.register_blueprint(conversation_bp)
@@ -71,11 +74,24 @@ def create_app():
     app.register_blueprint(message_bp)
     
     # 初始化SocketIO
-    from app.sockets import socketio, initialize_socket_listeners
+    from app.chat import socketio
     socketio.init_app(app, cors_allowed_origins="*", async_mode='threading')
     
-    # 初始化Redis监听器
-    with app.app_context():
-        initialize_socket_listeners(app)
+    
+    # 启动临时文件清理定时任务
+    from app.file.temp_file_route import cleanup_task
+    def run_cleanup_periodically():
+        with app.app_context():
+            while True:
+                # 每小时清理一次临时文件
+                app.logger.info("开始清理过期临时文件...")
+                deleted_count = cleanup_task()
+                app.logger.info(f"清理完成，共删除{deleted_count}个过期文件")
+                # 休眠1小时
+                time.sleep(3600)
+    
+    # 以守护线程方式启动定时任务
+    cleanup_thread = threading.Thread(target=run_cleanup_periodically, daemon=True)
+    cleanup_thread.start()
     
     return app
