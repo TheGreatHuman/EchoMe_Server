@@ -35,8 +35,66 @@ class AliyunAPIService:
             dashscope.api_key = api_key
             
         # 默认TTS模型和ASR模型
-        self.tts_model = os.getenv('TTS_MODEL', 'cosyvoice-v2')
+        self.tts_model = os.getenv('TTS_MODEL', 'cosyvoice-v1')
         self.asr_model = os.getenv('ASR_MODEL', 'qwen-audio-turbo-latest')
+        self.llm_model = os.getenv('LLM_MODEL', 'qwen-plus')
+
+    def text_chat_stream(
+        self, 
+        messages: List[Dict[str, Any]], 
+        stream_callback: Callable[[str, bool], Generator]
+    ) -> Generator[str, None, None]:
+        """
+        流式调用阿里云文本对话服务，通过回调函数实时返回生成的文本块
+        
+        Args:
+            messages: 对话历史消息列表，格式为[{"role": "user|assistant|system", "content": "消息内容"}]
+            stream_callback: 回调函数，接收(text_chunk, is_last)参数并返回Generator
+            
+        Returns:
+            Generator: 生成器，生成流式结果
+            
+        Raises:
+            Exception: 如果API调用失败
+        """
+        try:
+            # 调用大模型API进行流式对话
+            logger.info(f"调用文本对话API: {self.llm_model}")
+            
+            responses = Generation.call(
+                model=self.llm_model,
+                messages=messages,
+                result_format="message",
+                stream=True,
+                incremental_output=True,
+            )
+            
+            full_response = ""
+            
+            for response in responses:
+                if response.status_code == HTTPStatus.OK:
+                    # 获取当前文本块
+                    text_chunk = response.output.choices[0].message.content
+                    # 添加到完整响应中
+                    full_response += text_chunk
+                    # 回调处理函数
+                    is_last = response.output.choices[0].finish_reason is not None
+                    # 通过回调函数获取要发送的内容
+                    for chunk in stream_callback(text_chunk, is_last):
+                        yield chunk
+                else:
+                    logger.error(f"文本对话API调用失败: {response.message}")
+                    for chunk in stream_callback(f"调用出错: {response.message}", True):
+                        yield chunk
+                    raise Exception(f"文本对话API调用失败: {response.message}")
+            
+            return full_response
+            
+        except Exception as e:
+            logger.error(f"文本对话失败: {str(e)}")
+            for chunk in stream_callback(f"服务异常: {str(e)}", True):
+                yield chunk
+            raise Exception(f"文本对话失败: {str(e)}")
 
     def conclude_chat(self, messages: List[Dict[str, Any]]) -> str:
         """

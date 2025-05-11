@@ -67,10 +67,10 @@ class SessionInfo:
             你的性格要求:{role.personality}。
             你应该使用{response_language}与用户交流。
         """
-        self.messages.append = {
+        self.messages.append({
             "role": "system", 
             "content": [{"text": system_prompt}]
-        }
+        })
         
         
         voice: Voice = Voice.query.filter_by(voice_id=uuid.UUID(voice_id).bytes).first()
