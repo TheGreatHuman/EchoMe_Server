@@ -51,6 +51,11 @@ def send_message():
         )
         
         db.session.add(user_message)
+        
+        # 更新会话的最后消息和时间（用户消息）
+        conversation.last_message = data['content']
+        conversation.last_message_time = datetime.utcnow()
+        
         db.session.flush()  # 获取message_id，但不提交事务
         
         # 获取历史消息 (最多30条)
@@ -245,6 +250,7 @@ def delete_messages():
         
         # 获取消息所属的会话，并确保用户有权限
         conversation_ids = set(message.conversation_id for message in messages)
+        conversations_dict = {}
         conversations = Conversation.query.filter(
             Conversation.conversation_id.in_(conversation_ids)
         ).all()
@@ -254,10 +260,29 @@ def delete_messages():
         for conversation in conversations:
             if conversation.user_id != uuid.UUID(user_id).bytes:
                 return jsonify({"code": 403, "message": "无权删除部分消息"}), 403
+            conversations_dict[conversation.conversation_id] = conversation
         
         # 删除消息
         for message in messages:
             db.session.delete(message)
+        
+        # 更新各会话的最后一条消息
+        for conversation_id in conversation_ids:
+            conversation = conversations_dict.get(conversation_id)
+            if conversation:
+                # 查询这个会话的最后一条消息
+                last_message = Message.query.filter_by(
+                    conversation_id=conversation_id
+                ).order_by(Message.created_at.desc()).first()
+                
+                if last_message:
+                    # 更新会话的最后消息
+                    conversation.last_message = last_message.content
+                    conversation.last_message_time = last_message.created_at
+                else:
+                    # 如果会话没有消息了，清空最后消息
+                    conversation.last_message = None
+                    conversation.last_message_time = None
         
         db.session.commit()
         
