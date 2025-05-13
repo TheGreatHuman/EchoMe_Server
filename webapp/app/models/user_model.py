@@ -28,7 +28,7 @@ class User(db.Model):
 
     avatar_url = db.Column(
         BINARY(16),
-        db.ForeignKey('files.file_id', ondelete='SET NULL'),
+        # db.ForeignKey('files.file_id', ondelete='SET NULL'),
         nullable=True
     )
     @property

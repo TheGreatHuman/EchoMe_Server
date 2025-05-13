@@ -5,7 +5,7 @@ from flask import Blueprint, request, jsonify, send_file, current_app, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
 from app import db
-from app.file import file_bp
+from . import file_bp
 from app.models.file_model import File
 from app.models.user_model import User
 import re

@@ -19,7 +19,7 @@ class TempFileManager:
             'type': file_type
         }
         # 获取应用配置的过期时间（小时），如果不存在则使用默认值
-        expiry_hours = os.getenv('TEMP_FILE_EXPIRY', 24)
+        expiry_hours = int(os.getenv('TEMP_FILE_EXPIRY', 24))
         self.expiry[file_id] = time.time() + (expiry_hours * 60 * 60)
         return file_id
     
