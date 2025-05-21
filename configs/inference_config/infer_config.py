@@ -36,7 +36,7 @@ class InferenceConfig:
     DEFAULT_CONTEXT_OVERLAP = 3
     
     DEFAULT_CFG = 1.0
-    DEFAULT_STEPS = 6
+    DEFAULT_STEPS = 5
     DEFAULT_SAMPLE_RATE = 16000
     DEFAULT_FPS = 24
     DEFAULT_DEVICE = "cuda"

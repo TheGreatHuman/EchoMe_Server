@@ -83,20 +83,24 @@ def save_videos_from_pil(pil_images, path, fps=8, audio_path=None):
         raise ValueError("Unsupported file type. Use .mp4 or .gif.")
 
 
-def save_videos_grid(videos: torch.Tensor, path: str, audio_path=None, rescale=False, n_rows=6, fps=8):
+def save_videos_grid(ref_image, pos, videos: torch.Tensor, path: str, audio_path=None, rescale=False, n_rows=6, fps=8):
     videos = rearrange(videos, "b c t h w -> t b c h w")
     height, width = videos.shape[-2:]
     outputs = []
+    new_x0, new_y0, new_x1, new_y1 = pos
 
     for x in videos:
+        new_image = ref_image.copy()
         x = torchvision.utils.make_grid(x, nrow=n_rows)  # (c h w)
         x = x.transpose(0, 1).transpose(1, 2).squeeze(-1)  # (h w c)
         if rescale:
             x = (x + 1.0) / 2.0  # -1,1 -> 0,1
         x = (x * 255).numpy().astype(np.uint8)
         x = Image.fromarray(x)
+        x = x.resize((new_x1-new_x0, new_y1-new_y0))
+        new_image.paste(x, (new_x0, new_y0))
 
-        outputs.append(x)
+        outputs.append(new_image)
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
