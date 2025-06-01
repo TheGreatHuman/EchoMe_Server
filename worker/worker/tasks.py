@@ -182,16 +182,8 @@ class ModelManager:
 
 
 def select_face(det_bboxes, probs):
-    """从检测到的多个人脸中选择最大的一个
-    
-    Args:
-        det_bboxes: 人脸边界框
-        probs: 概率分数
-    
-    Returns:
-        最大人脸的边界框，如果没有合格的人脸则返回None
-    """
-    # 根据概率筛选
+    ## max face from faces that the prob is above 0.8
+    ## box: xyxy
     if det_bboxes is None or probs is None:
         return None
     filtered_bboxes = []
@@ -201,10 +193,8 @@ def select_face(det_bboxes, probs):
     if len(filtered_bboxes) == 0:
         return None
 
-    # 按面积从大到小排序
     sorted_bboxes = sorted(filtered_bboxes, key=lambda x:(x[3]-x[1]) * (x[2] - x[0]), reverse=True)
     return sorted_bboxes[0]
-
 
 class TaskProcessor:
     """任务处理器，负责处理音频到视频的推理任务"""
@@ -326,7 +316,7 @@ class TaskProcessor:
             
             # 为临时文件生成本地保存路径
             ref_path = os.path.join(self.temp_dir, f"{task_id}_ref_image.jpg")
-            audio_path = os.path.join(self.temp_dir, f"{task_id}_audio.wav")
+            audio_path = os.path.join(self.temp_dir, f"{task_id}_audio.mp3")
             
             # 下载文件
             self.reporter.report_status(task_id, session_id, 'processing', '下载必要文件...')
@@ -338,6 +328,7 @@ class TaskProcessor:
             # 人脸处理
             self.reporter.report_progress(task_id, session_id, 10, '处理参考图像...')
             face_img = cv2.imread(ref_path)
+            ref_img = Image.open(ref_path)
             face_mask = np.zeros((face_img.shape[0], face_img.shape[1])).astype('uint8')
             
             # 人脸检测
@@ -346,10 +337,8 @@ class TaskProcessor:
             select_bbox = select_face(det_bboxes, probs)
             
             if select_bbox is None:
-                logger.warning("未检测到合格的人脸，使用整张图像")
                 face_mask[:, :] = 255
             else:
-                # 根据人脸位置创建面部蒙版
                 xyxy = select_bbox[:4]
                 xyxy = np.round(xyxy).astype('int')
                 rb, re, cb, ce = xyxy[1], xyxy[3], xyxy[0], xyxy[2]
@@ -357,22 +346,16 @@ class TaskProcessor:
                 c_pad = int((ce - cb) * self.config.facemusk_dilation_ratio)
                 face_mask[rb - r_pad : re + r_pad, cb - c_pad : ce + c_pad] = 255
 
-                # 人脸裁剪
+                #### face crop
                 r_pad_crop = int((re - rb) * self.config.facecrop_dilation_ratio)
                 c_pad_crop = int((ce - cb) * self.config.facecrop_dilation_ratio)
-                crop_rect = [
-                    max(0, cb - c_pad_crop), 
-                    max(0, rb - r_pad_crop), 
-                    min(ce + c_pad_crop, face_img.shape[1]), 
-                    min(re + r_pad_crop, face_img.shape[0])
-                ]
-                
+                crop_rect = [max(0, cb - c_pad_crop), max(0, rb - r_pad_crop), min(ce + c_pad_crop, face_img.shape[1]), min(re + r_pad_crop, face_img.shape[0])]
+                print(crop_rect)
                 face_img, _ = crop_and_pad(face_img, crop_rect)
-                face_mask, _ = crop_and_pad(face_mask, crop_rect)
-                
-                # 调整大小
+                face_mask, pos = crop_and_pad(face_mask, crop_rect)
                 face_img = cv2.resize(face_img, (self.config.width, self.config.height))
-                face_mask = cv2.resize(face_mask, (self.config.width, self.config.height))
+                face_mask = cv2.resize(face_mask,  (self.config.width, self.config.height))
+
             
             # 将OpenCV图像转换为PIL图像
             ref_image_pil = Image.fromarray(face_img[:, :, [2, 1, 0]])
@@ -450,7 +433,7 @@ class TaskProcessor:
             output_path_with_audio = f"{save_dir}/{output_name}_withaudio.mp4"
             
             # 保存无音频视频
-            save_videos_grid(video, output_path, n_rows=1, fps=fps)
+            save_videos_grid(ref_img, pos, video, output_path, n_rows=1, fps=fps)
             
             # 添加音频并保存
             self.reporter.report_progress(task_id, session_id, 95, '添加音频...')
