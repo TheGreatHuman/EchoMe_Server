@@ -15,3 +15,9 @@ omegaconf==2.3.0
 opencv-python
 av==11.0.0
 gradio
+flask>=2.0.0
+flask-cors>=3.0.0
+flask-socketio>=5.0.0
+flask-jwt-extended>=4.0.0
+redis>=4.0.0
+dashscope

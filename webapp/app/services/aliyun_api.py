@@ -122,7 +122,7 @@ class AliyunAPIService:
             need_conclude_messages.reverse()
             need_conclude_messages.append({
                 "role": "user",
-                "content": [{"text": "总结以上对话的内容，方便下次聊天时参考"}]
+                "content": [{"text": "总结以上对话的内容"}]
             })
 
             
@@ -130,14 +130,13 @@ class AliyunAPIService:
             response = MultiModalConversation.call(
                 model=self.asr_model,
                 messages=need_conclude_messages,
-                result_format="message"
             )
             
             if response.status_code != 200:
                 raise Exception(f"ASR API调用失败: {response.message}")
                 
             # 提取识别文本
-            recognized_text = response.output.choices[0].message.content[0].text
+            recognized_text = response.output.choices[0]['message']['content'][0]['text']
             logger.info(f"ASR结果: {recognized_text}")
             return recognized_text
             
@@ -152,6 +151,8 @@ class AliyunAPIService:
         def __init__(self, stream_callback):
             self.stream_callback = stream_callback
             self.is_open = False
+            # 添加完成事件
+            self.complete_event = threading.Event()
             
         def on_open(self):
             self.is_open = True
@@ -165,9 +166,13 @@ class AliyunAPIService:
             logger.debug("TTS流式合成完成")
             # 发送最后一个块标记
             self.stream_callback(b'', True)
+            # 设置完成事件，通知等待的线程
+            self.complete_event.set()
             
         def on_error(self, message: str):
             logger.error(f"TTS流式合成错误: {message}")
+            # 发生错误时也设置事件，避免永久等待
+            self.complete_event.set()
             
         def on_close(self):
             self.is_open = False
@@ -227,13 +232,54 @@ class AliyunAPIService:
 
             for response in responses:
                 if response.status_code == HTTPStatus.OK:
-                    llm_text_chunk = response.output.choices[0]['message']['content']
-                    response_text += llm_text_chunk
-                    synthesizer.streaming_call(llm_text_chunk)
+                    if(response.output.choices[0]['finish_reason'] != 'stop'):
+
+                        logger.info(f"TTS流式合成结果: {response}")
+                        llm_text_chunk = response.output.choices[0]['message']['content'][0]['text']
+                        response_text += llm_text_chunk
+                        synthesizer.streaming_call(llm_text_chunk)
             synthesizer.streaming_complete()
+            
+            # 等待完成事件被设置，即等待on_complete被调用
+            logger.info("等待TTS流式合成完成...")
+            callback.complete_event.wait(timeout=60)  # 设置超时时间，避免永久阻塞
+            logger.info("TTS流式合成已完成，函数返回")
+
             return response_text
             
             
+        except Exception as e:
+            logger.error(f"语音流式合成失败: {str(e)}")
+            raise Exception(f"语音流式合成失败: {str(e)}")
+        
+    def audio_sync_mode(
+            self, 
+            voice_id: str, 
+            speech_rate: float = 1.0, 
+            pitch_rate: float = 1.0,
+            messages: List[Dict[str, Any]] = None,
+            format: AudioFormat = AudioFormat.MP3_22050HZ_MONO_256KBPS
+        ) -> Tuple[bytes, str]:
+        try:
+        # 创建合成器实例
+            synthesizer = SpeechSynthesizer(
+                model=self.tts_model,
+                voice=voice_id,
+                format=format,
+                speech_rate=1.0,
+                pitch_rate=1.0,
+            )
+
+            response = MultiModalConversation.call(
+                model="qwen-audio-turbo-latest", 
+                messages=messages,
+            )
+
+            response_text = response.output.choices[0]['message']['content'][0]['text']
+            logger.info(f"ALM结果: {response_text}")
+            audio = synthesizer.call(response_text)
+
+            return audio, response_text
         except Exception as e:
             logger.error(f"语音流式合成失败: {str(e)}")
             raise Exception(f"语音流式合成失败: {str(e)}")

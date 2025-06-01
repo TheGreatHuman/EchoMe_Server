@@ -74,7 +74,7 @@ class SessionInfo:
         
         
         voice: Voice = Voice.query.filter_by(voice_id=uuid.UUID(voice_id).bytes).first()
-        self.voice_name = voice.name
+        self.voice_name = voice.voice_name
         self.voice_call_name = voice.call_name
         self.speech_rate = speech_rate
         self.pitch_rate = pitch_rate
@@ -101,21 +101,24 @@ class SessionInfo:
                 
                 # 添加每个块
                 for chunk in self.audio_chunks:
-                    # 从二进制数据创建AudioSegment
-                    segment = AudioSegment.from_file(io.BytesIO(chunk), format="mp3")
+                    if is_response:
+                        segment = AudioSegment.from_file(io.BytesIO(chunk), format="mp3")
+                    else:
+                        # 从二进制数据创建AudioSegment
+                        segment = AudioSegment.from_file(io.BytesIO(chunk), format="m4a")
                     combined += segment
                 
                 # 导出到文件
                 combined.export(audio_file_path, format="mp3")
                 self.audio_chunks.clear()
 
-                audio_id = temp_file_manager.add_file(audio_file_path, "audio.wav", audio_file_type)
+                audio_id = temp_file_manager.add_file(audio_file_path, "audio.mp3", audio_file_type)
                 self.temp_files.append(audio_id)
                 if is_response:
                     self.audio_id = audio_id
                     return True
 
-                audio_file_path = f"file:/{audio_file_path}"
+                audio_file_path = f"file://{audio_file_path}"
                 self.messages.append({
                     "role": "user",
                     "content": [{"audio": audio_file_path}]
@@ -147,7 +150,7 @@ class SessionInfo:
     
     def insert_final_message(self, text: str) -> bool:
         try:
-            message = Message(self.conversation_id, self.mode, text, True)
+            message = Message(self.conversation_id, self.mode, text, False)
             db.session.add(message)
             db.session.commit()
         except Exception as e:

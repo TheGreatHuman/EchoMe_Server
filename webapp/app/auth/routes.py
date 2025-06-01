@@ -12,6 +12,9 @@ from flask_jwt_extended import (
 )
 import json
 
+@auth_bp.route('/hello', methods=['GET'])
+def hello():
+    return "hello"
 
 @auth_bp.route('/send_captcha', methods=['POST'])
 def send_captcha():

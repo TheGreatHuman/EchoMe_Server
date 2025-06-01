@@ -329,3 +329,229 @@
 - 需要携带有效的JWT Token。
 - 仅返回当前用户创建的所有音色，无论是否公开。
 - 按创建时间降序排列（最新创建的排在前面）。
+
+# 音色管理模块 API 文档
+
+本模块提供音色的创建、获取、管理等功能。所有接口都需要JWT验证。
+
+## 环境配置
+
+在使用音色创建功能前，需要设置以下环境变量：
+
+```bash
+export DASHSCOPE_API_KEY="your_dashscope_api_key"
+```
+
+## 接口列表
+
+### 1. 创建新音色
+
+通过上传的音频文件创建新的音色，使用阿里云DashScope进行音色复刻。
+
+- **URL**: `/api/voice/create_voice`
+- **方法**: POST
+- **认证**: 需要JWT令牌
+- **请求参数**:
+  - `audio_file_id` (字符串): 音频文件ID（通过文件上传API获得）
+  - `voice_name` (字符串): 音色名称
+  - `voice_gender` (字符串): 音色性别，可选值：'male', 'female', 'other'
+  - `voice_description` (字符串): 音色描述
+  - `is_public` (布尔值, 可选): 是否公开，默认为false
+
+**请求示例**:
+```json
+{
+  "audio_file_id": "550e8400-e29b-41d4-a716-446655440000",
+  "voice_name": "我的音色",
+  "voice_gender": "female",
+  "voice_description": "这是一个温柔的女声音色",
+  "is_public": false
+}
+```
+
+**返回参数**:
+- `code` (整数): 状态码
+- `message` (字符串): 返回信息
+- `voice` (对象): 创建的音色信息
+  - `voice_id` (字符串): 音色ID
+  - `voice_name` (字符串): 音色名称
+  - `voice_audition_url` (字符串): 试听音频文件ID
+  - `created_at` (字符串): 创建时间
+  - `created_by_user_id` (字符串): 创建者用户ID
+  - `is_public` (布尔值): 是否公开
+  - `call_name` (字符串): DashScope音色ID
+  - `voice_gender` (字符串): 音色性别
+  - `voice_description` (字符串): 音色描述
+- `dashscope_voice_id` (字符串): DashScope返回的音色ID
+- `error_info` (字符串, 可选): 错误信息
+
+**返回示例**:
+- 成功:
+  ```json
+  {
+    "code": 200,
+    "message": "create voice success",
+    "voice": {
+      "voice_id": "550e8400-e29b-41d4-a716-446655440000",
+      "voice_name": "我的音色",
+      "voice_audition_url": "661f9511-f3ac-52e5-b827-557766551111",
+      "created_at": "2023-04-01T12:00:00Z",
+      "created_by_user_id": "123e4567-e89b-12d3-a456-426614174000",
+      "is_public": false,
+      "call_name": "voice_my_voice_12345678",
+      "voice_gender": "female",
+      "voice_description": "这是一个温柔的女声音色"
+    },
+    "dashscope_voice_id": "voice_my_voice_12345678"
+  }
+  ```
+- 失败:
+  ```json
+  {
+    "code": 400,
+    "message": "Missing fields: audio_file_id"
+  }
+  ```
+
+**创建流程说明**:
+1. 验证用户提供的音频文件ID是否存在且有权限访问
+2. 构建音频文件下载URL（格式：`baseurl/api/temfile/download/<audio_file_id>`）
+3. 调用DashScope API创建音色复刻
+4. 使用复刻的音色生成试听音频（"今天天气怎么样？"）
+5. 将试听音频上传到文件系统
+6. 保存音色记录到数据库
+
+**注意事项**:
+- 音频文件必须是有效的音频格式（mp3, wav, ogg, aac, m4a, flac）
+- 每个阿里云主账号最多可复刻1000个音色
+- 避免频繁调用创建接口，每次调用都会创建新音色
+- 试听音频会自动设置为私有文件
+
+### 2. 获取音色列表
+
+获取音色列表，支持分页、筛选等功能。
+
+- **URL**: `/api/voice/get_voices`
+- **方法**: POST
+- **认证**: 需要JWT令牌
+- **请求参数**:
+  - `key_word` (字符串, 可选): 搜索关键词
+  - `page` (整数, 可选): 页码，默认为1
+  - `page_size` (整数, 可选): 每页数量，默认为10
+  - `gender` (字符串, 可选): 性别筛选，可选值：'all', 'male', 'female', 'other'，默认为'all'
+  - `created_by_current_user` (布尔值, 可选): 是否只显示当前用户创建的音色，默认为false
+
+**请求示例**:
+```json
+{
+  "key_word": "温柔",
+  "page": 1,
+  "page_size": 20,
+  "gender": "female",
+  "created_by_current_user": false
+}
+```
+
+**返回参数**:
+- `code` (整数): 状态码
+- `message` (字符串): 返回信息
+- `has_next` (布尔值): 是否有下一页
+- `voices` (数组): 音色列表
+  - `voice_id` (字符串): 音色ID
+  - `voice_name` (字符串): 音色名称
+  - `voice_gender` (字符串): 音色性别
+  - `voice_audition_url` (字符串): 试听音频文件ID
+  - `created_by_username` (字符串): 创建者用户名
+  - `created_by_user_id` (字符串): 创建者用户ID
+  - `voice_description` (字符串): 音色描述
+  - `created_at` (字符串): 创建时间
+  - `is_public` (布尔值): 是否公开
+  - `is_created_by_current_user` (布尔值): 是否为当前用户创建
+
+### 3. 获取我的音色列表
+
+获取当前用户创建的所有音色。
+
+- **URL**: `/api/voice/my_voices`
+- **方法**: GET
+- **认证**: 需要JWT令牌
+
+**返回参数**:
+- `code` (整数): 状态码
+- `message` (字符串): 返回信息
+- `voices` (数组): 音色列表（格式同上）
+
+### 4. 验证音色
+
+验证指定音色是否存在且当前用户是否有权限访问。
+
+- **URL**: `/api/voice/verify_voice`
+- **方法**: POST
+- **认证**: 需要JWT令牌
+- **请求参数**:
+  - `voice_id` (字符串): 音色ID
+
+**请求示例**:
+```json
+{
+  "voice_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**返回参数**:
+- `code` (整数): 状态码
+- `message` (字符串): 返回信息
+- `voice` (对象): 音色详细信息
+- `can_access` (布尔值): 是否可以访问
+
+## 使用流程示例
+
+### 创建新音色的完整流程
+
+1. **上传音频文件**
+   ```bash
+   curl -X POST 'http://your-domain.com/api/file/upload' \
+     -H 'Authorization: Bearer your_jwt_token' \
+     -F 'file=@voice_sample.mp3' \
+     -F 'is_public=false' \
+     -F 'description=音色训练样本'
+   ```
+
+2. **创建音色**
+   ```bash
+   curl -X POST 'http://your-domain.com/api/voice/create_voice' \
+     -H 'Authorization: Bearer your_jwt_token' \
+     -H 'Content-Type: application/json' \
+     -d '{
+       "audio_file_id": "550e8400-e29b-41d4-a716-446655440000",
+       "voice_name": "我的音色",
+       "voice_gender": "female",
+       "voice_description": "温柔的女声",
+       "is_public": false
+     }'
+   ```
+
+3. **获取试听音频**
+   ```bash
+   curl -X GET 'http://your-domain.com/api/file/download/661f9511-f3ac-52e5-b827-557766551111' \
+     -H 'Authorization: Bearer your_jwt_token' \
+     --output audition.mp3
+   ```
+
+## 错误码说明
+
+- `200`: 成功
+- `400`: 请求参数错误
+- `401`: 未授权（JWT令牌无效）
+- `403`: 权限不足
+- `404`: 资源不存在
+- `500`: 服务器内部错误
+
+## 依赖说明
+
+本模块依赖以下外部服务和库：
+- 阿里云DashScope API（音色复刻服务）
+- 文件上传模块（存储音频文件）
+- JWT认证模块（用户身份验证）
+
+确保在部署前正确配置相关环境变量和依赖。

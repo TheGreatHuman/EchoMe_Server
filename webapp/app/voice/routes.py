@@ -3,11 +3,22 @@ from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from uuid import UUID
 import uuid
+import os
+import tempfile
+import requests
 from app import db
 from app.voice import voice_bp
 from app.models.user_model import User
 from app.models.voice_model import Voice
+from app.models.file_model import File
 import math
+
+# 导入dashscope相关模块
+import dashscope
+from dashscope.audio.tts_v2 import VoiceEnrollmentService, SpeechSynthesizer
+
+# 设置dashscope API key
+dashscope.api_key = os.getenv('DASHSCOPE_API_KEY')
 
 @voice_bp.route('/get_voices', methods=['POST'])
 @jwt_required()
@@ -125,15 +136,14 @@ def create_voice() -> tuple[jsonify, int]:
 
         # 2. 解析请求体
         data = request.get_json() or {}
+        audio_file_id     = data.get('audio_file_id')  # 音频文件ID
         voice_name        = data.get('voice_name')
-        voice_url         = data.get('voice_url')
-        call_name         = data.get('call_name')
         voice_gender      = data.get('voice_gender')
         voice_description = data.get('voice_description')
         is_public         = data.get('is_public', False)
 
         # 3. 校验必填字段
-        missing = [f for f in ('voice_name','voice_url','call_name','voice_gender','voice_description')
+        missing = [f for f in ('audio_file_id', 'voice_name', 'voice_gender', 'voice_description')
                    if not data.get(f)]
         if missing:
             return jsonify({
@@ -151,26 +161,123 @@ def create_voice() -> tuple[jsonify, int]:
         # 5. 强制 is_public 为布尔
         is_public = bool(is_public)
 
-        # 6. 创建 Voice 实例
+
+        # 7. 构建音频文件的下载URL
+        base_url = "http://14.103.180.207:5000"
+        audio_url = f"{base_url}/api/tempfile/download/{audio_file_id}"
+
+        # 8. 调用dashscope创建音色
+        try:
+            target_model = "cosyvoice-v1"
+            prefix = "digital"  # 使用用户ID前8位作为前缀
+            
+            # 创建语音注册服务实例
+            service = VoiceEnrollmentService()
+            
+            # 调用create_voice方法复刻声音，并生成voice_id
+            call_name = service.create_voice(target_model=target_model, prefix=prefix, url=audio_url)
+            
+            if not call_name:
+                return jsonify({
+                    'code': 500,
+                    'message': 'Failed to create voice with dashscope'
+                }), 500
+
+        except Exception as e:
+            return jsonify({
+                'code': 500,
+                'message': 'Dashscope API error',
+                'error_info': str(e)
+            }), 500
+
+        # 9. 使用复刻的声音生成试听音频
+        try:
+            synthesizer = SpeechSynthesizer(model=target_model, voice=call_name)
+            audio_data = synthesizer.call("今天天气怎么样？")
+            
+            if not audio_data:
+                return jsonify({
+                    'code': 500,
+                    'message': 'Failed to generate audition audio'
+                }), 500
+
+        except Exception as e:
+            return jsonify({
+                'code': 500,
+                'message': 'Audio synthesis error',
+                'error_info': str(e)
+            }), 500
+
+        # 10. 将试听音频保存为临时文件并上传
+        try:
+            # 创建临时文件
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
+                temp_file.write(audio_data)
+                temp_file_path = temp_file.name
+
+            # 准备上传到文件API
+            upload_url = f"{base_url}/api/file/upload"
+            
+            # 获取用户请求时携带的JWT token
+            token = request.headers.get('Authorization', '').replace('Bearer ', '')
+            
+            with open(temp_file_path, 'rb') as f:
+                files = {'file': ('audition.mp3', f, 'audio/mpeg')}
+                form_data = {
+                    'is_public': 'false',  # 试听音频设为私有
+                    'description': f'Voice audition for {voice_name}'
+                }
+                headers = {'Authorization': f'Bearer {token}'}
+                
+                response = requests.post(upload_url, files=files, data=form_data, headers=headers)
+                
+            # 清理临时文件
+            os.unlink(temp_file_path)
+            
+            if response.status_code != 201:
+                return jsonify({
+                    'code': 500,
+                    'message': 'Failed to upload audition audio',
+                    'error_info': response.text
+                }), 500
+                
+            upload_result = response.json()
+            audition_file_id = upload_result.get('file_id')
+            
+            if not audition_file_id:
+                return jsonify({
+                    'code': 500,
+                    'message': 'Failed to get audition file ID'
+                }), 500
+
+        except Exception as e:
+            return jsonify({
+                'code': 500,
+                'message': 'File upload error',
+                'error_info': str(e)
+            }), 500
+
+        # 11. 创建 Voice 实例
         voice = Voice(
             voice_name=voice_name,
-            voice_url=voice_url,
+            voice_url=audition_file_id,  # 使用试听音频的文件ID
             created_by=current_user_id_str,
-            call_name=call_name,
+            call_name=call_name,  # 使用dashscope返回的voice_id
             voice_gender=voice_gender,
             voice_description=voice_description,
             is_public=is_public
         )
 
-        # 7. 持久化
+        # 12. 持久化
         db.session.add(voice)
         db.session.commit()
 
-        # 8. 返回新建结果
+        # 13. 返回新建结果
         return jsonify({
             'code': 200,
             'message': 'create voice success',
-            'voice': voice.to_dict()
+            'voice': voice.to_dict(),
+            'dashscope_voice_id': call_name
         }), 200
 
     except Exception as e:

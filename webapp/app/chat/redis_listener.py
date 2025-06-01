@@ -27,7 +27,7 @@ class RedisListener:
         self.redis_password = os.getenv('REDIS_PASSWORD', None)
         
         # 通道名称
-        self.pubsub_channel = os.getenv('PUBSUB_CHANNEL', 'task_events')
+        self.pubsub_channel = os.getenv('PUBSUB_CHANNEL', 'task_progress')
         
         # 创建Redis连接
         self.redis_client = None
@@ -122,11 +122,11 @@ class RedisListener:
             data = json.loads(message['data'])
             
             # 提取关键信息
-            event = data.get('event')
+            status = data.get('status')
             task_id = data.get('task_id')
             session_id = data.get('session_id')
             
-            if not all([event, task_id, session_id]):
+            if not all([status, task_id, session_id]):
                 logger.warning(f"收到无效消息: {data}")
                 return
                 
@@ -136,20 +136,20 @@ class RedisListener:
                 return
                 
             # 根据事件类型处理
-            if event == 'task_progress':
+            if status == 'progress':
                 # 处理任务进度消息
                 self._handle_progress(data, session_id)
                 
-            elif event == 'task_completed':
+            elif status == 'completed':
                 # 处理任务完成消息
                 self._handle_completion(data, session_id)
                 
-            elif event == 'task_error':
+            elif status == 'error':
                 # 处理任务错误消息
                 self._handle_error(data, session_id)
                 
             else:
-                logger.warning(f"未知的事件类型: {event}")
+                logger.warning(f"未知的事件类型: {status}")
                 
         except Exception as e:
             logger.error(f"处理Redis消息时出错: {str(e)}")
@@ -179,18 +179,17 @@ class RedisListener:
         """处理任务完成消息"""
         try:
             task_id = data.get('task_id')
-            video_url = data.get('video_url')
-            video_id = data.get('video_id')  # 可能是一个临时文件ID
+            video_id = data.get('video_file_id')  # 可能是一个临时文件ID
             
             # 如果提供了视频ID，将其添加到会话的临时文件列表
             if video_id and session_id in session_manager:
                 session_manager[session_id].temp_files.append(video_id)
             
             # 向客户端发送任务结果
-            self.socketio.emit('task_result', {
+            self.socketio.emit('video_result', {
                 'task_id': task_id,
                 'status': 'completed',
-                'video_url': video_url
+                'video_url': video_id
             }, room=session_id)
             
             logger.info(f"任务完成，ID: {task_id}")

@@ -24,14 +24,14 @@ class Scheduler:
         """初始化调度器"""
         # 从配置获取Redis连接信息
         redis_host = os.getenv('REDIS_HOST', 'localhost')
-        redis_port = os.getenv('REDIS_PORT', 6379)
-        redis_db = os.getenv('REDIS_DB', 0)
+        redis_port = int(os.getenv('REDIS_PORT', 6379))
+        redis_db = int(os.getenv('REDIS_DB', 0))
         redis_pass = os.getenv('REDIS_PASSWORD')
         self.redis_client = redis.Redis(host=redis_host, port=redis_port, db=redis_db, password=redis_pass)
         
         # 队列名前缀和最大Worker数量
         self.task_queue_prefix = os.getenv('TASK_QUEUE_PREFIX', 'task_queue_gpu_')
-        self.max_workers = os.getenv('MAX_WORKERS', 2)
+        self.max_workers = int(os.getenv('MAX_WORKERS', 2))
         
         # Worker状态键前缀
         self.gpu_status_prefix = os.getenv('GPU_STATUS_PREFIX', 'gpu_status:')
@@ -55,6 +55,7 @@ class Scheduler:
         try:
             status_key = f"{self.gpu_status_prefix}{worker_id}"
             status = self.redis_client.get(status_key)
+            logger.info(f"get worker status {status_key} {status}")
             
             if status is None:
                 return 'offline'
@@ -87,10 +88,12 @@ class Scheduler:
             List[int]: 空闲Worker ID列表
         """
         idle_workers = []
+        logger.info(f"get idle workers")
         
         for worker_id in range(self.max_workers):
             if self.get_worker_status(worker_id) == 'idle':
                 idle_workers.append(worker_id)
+        logger.info(f"idle workers {idle_workers}")
         
         return idle_workers
     
@@ -101,6 +104,7 @@ class Scheduler:
         Returns:
             Optional[str]: 队列名或None（如果没有可用Worker）
         """
+        logger.info(f"select worker queue")
         idle_workers = self.get_idle_workers()
         
         if not idle_workers:

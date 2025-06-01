@@ -16,7 +16,7 @@ from app.chat.redis_listener import init_redis_listener
 
 # 创建调度器实例
 scheduler = Scheduler()
-socketio = SocketIO(cors_allowed_origins="*")
+socketio = SocketIO(cors_allowed_origins="*", logger=True)
 # 初始化日志
 logger = logging.getLogger(__name__)
 
@@ -31,16 +31,16 @@ def handle_disconnect():
     """处理客户端断开连接事件"""
     logger.info(f"客户端断开连接: {request.sid}")
     
-    # 查找与此连接相关的会话
-    session_to_clean = None
-    for session_id, session_info in list(session_manager.items()):
-        if request.sid == session_id:
-            session_to_clean = session_id
-            break
+    # # 查找与此连接相关的会话
+    # session_to_clean = None
+    # for session_id, session_info in list(session_manager.items()):
+    #     if request.sid == session_id:
+    #         session_to_clean = session_id
+    #         break
     
-    # 如果找到会话，执行清理
-    if session_to_clean:
-        handle_session_cleanup(session_to_clean)
+    # # 如果找到会话，执行清理
+    # if session_to_clean:
+    #     handle_session_cleanup(session_to_clean)
 
 @socketio.on('request_connection')
 def handle_request_connection(data):
@@ -49,13 +49,14 @@ def handle_request_connection(data):
         logger.info(f"接收到连接请求: {data}")
         
         # 验证请求数据
-        verify_jwt_in_request()
+        # verify_jwt_in_request()
         # token = data.get('token')
         mode = data.get('mode')
         conversation_id = data.get('conversation_id')
         speech_rate = float(data.get('speech_rate', 1.0))
         pitch_rate = float(data.get('pitch_rate', 1.0))
         image_id = data.get('image_id')
+        voice_id = data.get('voice_id')
         
         if not all([mode, conversation_id]):
             emit('error', {
@@ -73,6 +74,7 @@ def handle_request_connection(data):
             speech_rate=speech_rate,
             pitch_rate=pitch_rate,
             image_id=image_id,
+            voice_id=voice_id,
             mode=mode
         )
         
@@ -175,11 +177,12 @@ def handle_stop_session(data):
         logger.info(f"接收到停止会话请求: {session_id}")
         
         # 执行会话清理
-        success = handle_session_cleanup(session_id)
+        success, final_text = handle_session_cleanup(session_id)
         
         # 发送确认
         if success:
-            emit('session_stopped_ack', {}, room=session_id)
+            emit('session_stopped_ack', {"conclusion": final_text}, room=session_id)
+        leave_room(session_id)
         
     except Exception as e:
         logger.error(f"处理停止会话请求时出错: {str(e)}")
@@ -210,30 +213,15 @@ def process_complete_audio(session_id, audio_url=None):
         
         if not audio_url:
             raise Exception("找不到有效的音频URL")
-            
-        # 调用语音识别服务转为文本
-        recognized_text = aliyun_service.recognize_audio(audio_url)
-        
-        # 记录转写结果并发送给客户端
-        # 添加用户文本到会话历史
-        session_info.messages.append({
-            "role": "user",
-            "content": [{"text": recognized_text}]
-        })
-        
-        # 发送ASR结果给客户端
-        emit('asr_result', {
-            'user_text': recognized_text,
-            'original_audio_url': audio_url
-        }, room=session_id)
+
         
         # 根据不同的会话模式处理
         if session_mode == 'voice':
             # 语音聊天模式：流式TTS
-            handle_voice_chat_mode(session_id, recognized_text)
+            handle_voice_chat_mode(session_id, audio_url)
         elif session_mode == 'video':
             # 视频聊天模式：调用视频生成
-            handle_video_chat_mode(session_id, recognized_text)
+            handle_video_chat_mode(session_id)
         else:
             logger.error(f"未知的会话模式: {session_mode}")
             emit('error', {
@@ -248,7 +236,7 @@ def process_complete_audio(session_id, audio_url=None):
             'message': f'处理音频时出错: {str(e)}'
         }, room=session_id)
 
-def handle_voice_chat_mode(session_id, recognized_text):
+def handle_voice_chat_mode(session_id, audio_url):
     """处理语音聊天模式"""
     try:
         session_info = session_manager[session_id]
@@ -268,14 +256,36 @@ def handle_voice_chat_mode(session_id, recognized_text):
                 'format': 'mp3'  # 或根据实际格式调整
             }, room=session_id)
         
+        # # 流式调用TTS服务
+        # response_text = aliyun_service.audio_stream_mode(
+        #     voice_id=session_info.voice_call_name,
+        #     stream_callback=tts_stream_callback,
+        #     speech_rate=session_info.speech_rate,
+        #     pitch_rate=session_info.pitch_rate,
+        #     messages=session_info.messages
+        # )
         # 流式调用TTS服务
-        response_text = aliyun_service.audio_stream_mode(
+        logger.info(f"voice_id: {session_info.voice_call_name}")
+        audio, response_text = aliyun_service.audio_sync_mode(
             voice_id=session_info.voice_call_name,
-            stream_callback=tts_stream_callback,
             speech_rate=session_info.speech_rate,
             pitch_rate=session_info.pitch_rate,
             messages=session_info.messages
         )
+        # 发送ASR结果给客户端
+        emit('final_response_info', {
+            'llm_full_response': response_text,
+            'original_audio_url': audio_url
+        }, room=session_id)
+
+        emit('tts_audio_stream', {
+                'audio_chunk': base64.b64encode(audio),
+                'is_last': True,
+                'format': 'mp3'  # 或根据实际格式调整
+            }, room=session_id)
+        
+
+
         # 记录AI回复到会话历史
         session_info.add_message("assistant", "text", response_text)
         
@@ -286,7 +296,7 @@ def handle_voice_chat_mode(session_id, recognized_text):
             'message': f'处理语音聊天时出错: {str(e)}'
         }, room=session_id)
 
-def handle_video_chat_mode(session_id, recognized_text):
+def handle_video_chat_mode(session_id):
     """处理视频聊天模式"""
     try:
         session_info = session_manager[session_id]
@@ -299,34 +309,48 @@ def handle_video_chat_mode(session_id, recognized_text):
                 session_info.add_audio_chunk(audio_chunk)
             
         # 流式调用TTS服务
-        response_text = aliyun_service.audio_stream_mode(
+        # response_text = aliyun_service.audio_stream_mode(
+        #     voice_id=session_info.voice_call_name,
+        #     stream_callback=tts_stream_callback,
+        #     speech_rate=session_info.speech_rate,
+        #     pitch_rate=session_info.pitch_rate,
+        #     messages=session_info.messages
+        # )
+        audio, response_text = aliyun_service.audio_sync_mode(
             voice_id=session_info.voice_call_name,
-            stream_callback=tts_stream_callback,
             speech_rate=session_info.speech_rate,
             pitch_rate=session_info.pitch_rate,
             messages=session_info.messages
         )
+        session_info.add_audio_chunk(audio)
+        logger.info(f"add audio chunk")
+        session_info.save_audio_chunks(is_response=True)
+        logger.info(f"save audio chunks")
         # 记录AI回复到会话历史
         session_info.add_message("assistant", "text", response_text)
+        logger.info(f"add message {response_text}")
         
         # 准备任务数据
         task_payload = {
             'task_id': session_id,
             'session_id': session_id,
-            'role_image_url': session_info.image_id,
-            'audio_url': session_info.audio_id,
+            'ref_image_id': session_info.image_id,
+            'audio_id': session_info.audio_id,
         }
         
         # 保存任务信息到会话
         session_info.task_info[session_id] = task_payload
+        logger.info(f"save task info {task_payload}")
         
         # 选择Worker队列
         target_queue = scheduler.select_worker_queue()
+        logger.info(f"select worker queue {target_queue}")
         if not target_queue:
             raise Exception("没有可用的Worker")
             
         # 提交任务到队列
         submit_success = submit_task_to_worker(queue_name=target_queue, task_data=task_payload)
+        logger.info(f"submit task to worker {submit_success}")
         if not submit_success:
             raise Exception("提交任务失败")
             
@@ -351,12 +375,12 @@ def handle_session_cleanup(session_id):
         # 检查会话是否存在
         if session_id not in session_manager:
             logger.warning(f"尝试清理不存在的会话: {session_id}")
-            return False
+            return False, None
             
         # 获取会话信息
         session_info = session_manager.pop(session_id, None)
         if not session_info:
-            return False
+            return False, None
         
         final_text = aliyun_service.conclude_chat(session_info.messages)
         if final_text:
@@ -371,19 +395,19 @@ def handle_session_cleanup(session_id):
             success_count = temp_file_manager.delete_files(file_ids)
             logger.info(f"已清理 {success_count}/{len(file_ids)} 个会话临时文件")
         
-        emit('session_stopped_ack', {
-                "conclusion": final_text
-            }, room=session_id) 
+        # emit('session_stopped_ack', {
+        #         "conclusion": final_text
+        #     }, room=session_id) 
           
-        # 让客户端离开房间
-        leave_room(session_id)
+        # # 让客户端离开房间
+        # leave_room(session_id)
         
         logger.info(f"会话已清理: {session_id}")
-        return True
+        return True, final_text
         
     except Exception as e:
         logger.error(f"清理会话时出错: {str(e)}")
-        return False
+        return False, None
     
 # 初始化Redis Pub/Sub监听
 init_redis_listener(socketio)

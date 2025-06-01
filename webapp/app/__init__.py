@@ -75,7 +75,7 @@ def create_app():
     
     # 初始化SocketIO
     from app.chat import socketio
-    socketio.init_app(app, cors_allowed_origins="*", async_mode='threading')
+    socketio.init_app(app)
     
     
     # 启动临时文件清理定时任务
